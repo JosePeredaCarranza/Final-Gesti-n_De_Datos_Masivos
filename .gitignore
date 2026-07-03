@@ -1,0 +1,55 @@
+# Entorno Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Variables locales
+.env
+.env.local
+
+# Datos grandes
+data/raw/**
+data/bronze/**
+data/silver/**
+data/gold/**
+data/landing/**
+data/staging/**
+
+# Mantener estructura vacía
+!**/.gitkeep
+
+# Logs y auditoría generados
+logs/**
+audit/**/*.jsonl
+audit/**/*.parquet
+audit/**/*.csv
+
+# Mantener carpetas de auditoría
+!logs/.gitkeep
+!audit/**/.gitkeep
+
+# Archivos temporales
+*.tmp
+*.part
+*.bak
+*.crc
+_SUCCESS
+_committed_*
+_started_*
+
+# Spark
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Power BI / Office temporales
+~$*
+*.tmp
+
+# Sistema operativo
+.DS_Store
+Thumbs.db

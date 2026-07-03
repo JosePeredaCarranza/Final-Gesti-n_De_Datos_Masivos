@@ -1,0 +1,39 @@
+# Configuración base del pipeline TLC Trip Record Data
+
+source:
+  name: "NYC Taxi and Limousine Commission"
+  url: "https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page"
+  cloudfront_base_url: "https://d37ci6vzurychx.cloudfront.net/trip-data"
+
+ingestion:
+  years:
+    - 2023
+    - 2024
+    - 2025
+    - 2026
+  trip_types:
+    - yellow
+    - green
+    - fhv
+    - fhvhv
+  closed_years:
+    - 2023
+    - 2024
+    - 2025
+  dynamic_years:
+    - 2026
+  overwrite_raw: false
+  strict_completeness: true
+
+paths:
+  raw: "data/raw/tlc_trip_records"
+  bronze: "data/bronze/tlc_trip_records"
+  silver: "data/silver/tlc_trip_records"
+  gold: "data/gold/tlc_trip_records"
+  logs: "logs"
+  audit: "audit"
+
+audit:
+  manifest_file: "logs/tlc_ingestion_manifest.jsonl"
+  pipeline_name: "tlc_trip_record_data_pipeline"
+  pipeline_version: "1.0.0"
