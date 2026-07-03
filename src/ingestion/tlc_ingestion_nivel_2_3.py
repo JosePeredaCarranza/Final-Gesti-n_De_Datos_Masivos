@@ -67,6 +67,7 @@ except Exception:  # pragma: no cover
 try:
     from tqdm import tqdm
 except Exception:  # pragma: no cover
+
     def tqdm(iterable: Iterable, **_: Any) -> Iterable:
         return iterable
 
@@ -82,6 +83,7 @@ LOCAL_TZ = "America/Lima"
 BASE_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data"
 LOOKUP_URL = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
 SOURCE_PAGE = "https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page"
+FORBIDDEN_COOLDOWN_SECONDS = 300
 
 TRIP_TYPE_PREFIX = {
     "yellow": "yellow_tripdata",
@@ -99,6 +101,7 @@ console = Console() if Console else None
 # 1. CONFIGURACIÓN
 # ============================================================
 
+
 @dataclass(frozen=True)
 class PipelineConfig:
     years: list[int]
@@ -108,6 +111,7 @@ class PipelineConfig:
     strict_completeness: bool
     include_lookup: bool
     workspace_dir: Path
+    forbidden_cooldown_seconds: int = FORBIDDEN_COOLDOWN_SECONDS
     local_tz: str = LOCAL_TZ
     pipeline_name: str = PIPELINE_NAME
     pipeline_version: str = PIPELINE_VERSION
@@ -202,7 +206,7 @@ def parse_args() -> PipelineConfig:
     parser.add_argument(
         "--workspace-dir",
         type=Path,
-        default=Path.cwd() / "tlc_ingestion_workspace",
+        default=Path.cwd() / "../../data",
         help="Directorio base donde se crearán raw, bronze y logs.",
     )
     parser.add_argument(
@@ -220,8 +224,17 @@ def parse_args() -> PipelineConfig:
         action="store_true",
         help="No descarga Taxi Zone Lookup Table.",
     )
+    parser.add_argument(
+        "--cooldown-minutes",
+        type=int,
+        default=5,
+        help="Minutos de espera antes de reintentar una descarga bloqueada con HTTP 403.",
+    )
 
     args = parser.parse_args()
+
+    if args.cooldown_minutes < 0:
+        raise argparse.ArgumentTypeError("--cooldown-minutes debe ser >= 0.")
 
     return PipelineConfig(
         years=args.years,
@@ -231,12 +244,14 @@ def parse_args() -> PipelineConfig:
         strict_completeness=not args.no_strict_completeness,
         include_lookup=not args.no_lookup,
         workspace_dir=args.workspace_dir,
+        forbidden_cooldown_seconds=args.cooldown_minutes * 60,
     )
 
 
 # ============================================================
 # 2. PRESENTACIÓN Y UTILIDADES
 # ============================================================
+
 
 def print_panel(title: str, message: Any, style: str = "blue") -> None:
     if console and Panel:
@@ -331,10 +346,14 @@ def url_exists(url: str) -> bool:
             "--silent",
             "--show-error",
             "--head",
-            "--connect-timeout", "20",
-            "--max-time", "40",
-            "-A", "Mozilla/5.0",
-            "-e", SOURCE_PAGE,
+            "--connect-timeout",
+            "20",
+            "--max-time",
+            "40",
+            "-A",
+            "Mozilla/5.0",
+            "-e",
+            SOURCE_PAGE,
             url,
         ]
         completed = subprocess.run(cmd, capture_output=True, text=True)
@@ -362,13 +381,23 @@ def download_with_curl(url: str, target_path: Path) -> None:
         "--fail",
         "--silent",
         "--show-error",
-        "--retry", "3",
-        "--retry-delay", "2",
-        "--connect-timeout", "30",
-        "--max-time", "0",
-        "-A", "Mozilla/5.0",
-        "-e", SOURCE_PAGE,
-        "-o", str(target_path),
+        "--retry",
+        "5",
+        "--retry-delay",
+        "5",
+        "--retry-all-errors",
+        "--connect-timeout",
+        "30",
+        "--max-time",
+        "0",
+        "-H",
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "-H",
+        "Accept: application/octet-stream,*/*",
+        "-H",
+        f"Referer: {SOURCE_PAGE}",
+        "-o",
+        str(target_path),
         url,
     ]
 
@@ -387,11 +416,31 @@ def download_with_urllib(url: str, target_path: Path) -> None:
         },
     )
 
-    with urllib.request.urlopen(request, timeout=120) as response, target_path.open("wb") as file:
+    with (
+        urllib.request.urlopen(request, timeout=120) as response,
+        target_path.open("wb") as file,
+    ):
         shutil.copyfileobj(response, file)
 
 
-def download_file(url: str, target_path: Path, overwrite: bool) -> str:
+def is_http_403_error(error: Any) -> bool:
+    error_message = str(error).lower()
+    return "403" in error_message or "forbidden" in error_message
+
+
+def _download_once(url: str, part_path: Path) -> None:
+    if has_curl():
+        download_with_curl(url, part_path)
+    else:
+        download_with_urllib(url, part_path)
+
+
+def download_file(
+    url: str,
+    target_path: Path,
+    overwrite: bool,
+    cooldown_seconds: int = FORBIDDEN_COOLDOWN_SECONDS,
+) -> str:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     part_path = target_path.with_suffix(target_path.suffix + ".part")
 
@@ -401,10 +450,30 @@ def download_file(url: str, target_path: Path, overwrite: bool) -> str:
     if part_path.exists():
         part_path.unlink()
 
-    if has_curl():
-        download_with_curl(url, part_path)
-    else:
-        download_with_urllib(url, part_path)
+    try:
+        _download_once(url, part_path)
+    except Exception as first_error:
+        if not is_http_403_error(first_error) or cooldown_seconds <= 0:
+            raise
+
+        minutes = round(cooldown_seconds / 60, 2)
+        print_panel(
+            "HTTP 403",
+            f"Bloqueo temporal detectado. Esperando {minutes} minuto(s) antes de reintentar el mismo archivo.",
+            "yellow",
+        )
+        time.sleep(cooldown_seconds)
+
+        if part_path.exists():
+            part_path.unlink()
+
+        try:
+            _download_once(url, part_path)
+        except Exception as second_error:
+            raise RuntimeError(
+                f"Falló luego de esperar {minutes} minuto(s). "
+                f"Primer error: {first_error}. Segundo error: {second_error}"
+            ) from second_error
 
     if not part_path.exists() or part_path.stat().st_size == 0:
         raise RuntimeError("Descarga vacía.")
@@ -417,6 +486,7 @@ def download_file(url: str, target_path: Path, overwrite: bool) -> str:
 # 3. JAVA Y SPARK
 # ============================================================
 
+
 def first_existing_path(paths: list[str]) -> str | None:
     for candidate in paths:
         path = Path(candidate)
@@ -427,12 +497,14 @@ def first_existing_path(paths: list[str]) -> str | None:
 
 def configure_java_and_spark_env() -> None:
     if platform.system().lower() == "windows":
-        detected_java = first_existing_path([
-            r"C:\Program Files\Java\jdk-17",
-            r"C:\Program Files\Java\jdk-21",
-            r"C:\Program Files\Eclipse Adoptium\jdk-17",
-            r"C:\Program Files\Eclipse Adoptium\jdk-21",
-        ])
+        detected_java = first_existing_path(
+            [
+                r"C:\Program Files\Java\jdk-17",
+                r"C:\Program Files\Java\jdk-21",
+                r"C:\Program Files\Eclipse Adoptium\jdk-17",
+                r"C:\Program Files\Eclipse Adoptium\jdk-21",
+            ]
+        )
 
         if detected_java:
             os.environ["JAVA_HOME"] = detected_java
@@ -459,8 +531,7 @@ def start_spark():
 
     spark_start = time.perf_counter()
     spark = (
-        SparkSession.builder
-        .appName("TLC_Ingestion_Nivel_2_3")
+        SparkSession.builder.appName("TLC_Ingestion_Nivel_2_3")
         .master("local[1]")
         .config("spark.driver.host", "127.0.0.1")
         .config("spark.driver.bindAddress", "127.0.0.1")
@@ -478,7 +549,11 @@ def start_spark():
     spark.range(1).collect()
 
     elapsed = round(time.perf_counter() - spark_start, 2)
-    print_panel("Spark activo", f"Versión: {spark.version} | Inicio: {elapsed} segundos", "green")
+    print_panel(
+        "Spark activo",
+        f"Versión: {spark.version} | Inicio: {elapsed} segundos",
+        "green",
+    )
     return spark
 
 
@@ -486,7 +561,10 @@ def start_spark():
 # 4. CATÁLOGO DE ARCHIVOS TLC
 # ============================================================
 
-def build_trip_file_record(config: PipelineConfig, year: int, month: int, trip_type: str) -> dict[str, Any]:
+
+def build_trip_file_record(
+    config: PipelineConfig, year: int, month: int, trip_type: str
+) -> dict[str, Any]:
     prefix = TRIP_TYPE_PREFIX[trip_type]
     file_name = f"{prefix}_{year}-{month:02d}.parquet"
     url = f"{BASE_URL}/{file_name}"
@@ -564,34 +642,44 @@ def apply_test_limit(catalog_df: pd.DataFrame, max_files: int | None) -> pd.Data
 # 5. VALIDACIÓN DE COBERTURA
 # ============================================================
 
-def validate_closed_year_coverage(config: PipelineConfig, full_catalog_df: pd.DataFrame) -> None:
+
+def validate_closed_year_coverage(
+    config: PipelineConfig, full_catalog_df: pd.DataFrame
+) -> None:
     expected_records = []
 
     for year in config.closed_years:
         for month in range(1, 13):
             for trip_type in config.selected_trip_types:
-                expected_records.append({
-                    "year": int(year),
-                    "month": int(month),
-                    "trip_type": trip_type,
-                })
+                expected_records.append(
+                    {
+                        "year": int(year),
+                        "month": int(month),
+                        "trip_type": trip_type,
+                    }
+                )
 
     expected_df = pd.DataFrame(expected_records)
 
     if expected_df.empty:
-        print_panel("Validación de cobertura", "No hay años cerrados para validar.", "yellow")
+        print_panel(
+            "Validación de cobertura", "No hay años cerrados para validar.", "yellow"
+        )
         return
 
     current_df = full_catalog_df[["year", "month", "trip_type"]].drop_duplicates()
     missing_df = (
-        expected_df
-        .merge(current_df, on=["year", "month", "trip_type"], how="left", indicator=True)
+        expected_df.merge(
+            current_df, on=["year", "month", "trip_type"], how="left", indicator=True
+        )
         .query("_merge == 'left_only'")
         .drop(columns=["_merge"])
     )
 
     if missing_df.empty:
-        print_panel("Validación de cobertura", "Cobertura completa para años cerrados.", "green")
+        print_panel(
+            "Validación de cobertura", "Cobertura completa para años cerrados.", "green"
+        )
         return
 
     print_dataframe(missing_df, "Archivos faltantes para años cerrados", max_rows=80)
@@ -609,6 +697,7 @@ def validate_closed_year_coverage(config: PipelineConfig, full_catalog_df: pd.Da
 # 6. DESCARGA RAW
 # ============================================================
 
+
 def download_raw_files(
     config: PipelineConfig,
     catalog_df: pd.DataFrame,
@@ -617,7 +706,9 @@ def download_raw_files(
 ) -> pd.DataFrame:
     download_results = []
 
-    for _, row in tqdm(catalog_df.iterrows(), total=len(catalog_df), desc="Descargando raw"):
+    for _, row in tqdm(
+        catalog_df.iterrows(), total=len(catalog_df), desc="Descargando raw"
+    ):
         local_path = Path(row["local_path"])
 
         result = {
@@ -641,9 +732,14 @@ def download_raw_files(
         }
 
         try:
-            result["status"] = download_file(row["url"], local_path, config.overwrite_raw)
+            result["status"] = download_file(
+                row["url"],
+                local_path,
+                config.overwrite_raw,
+                config.forbidden_cooldown_seconds,
+            )
             result["size_bytes"] = int(local_path.stat().st_size)
-            result["size_gb"] = round(result["size_bytes"] / (1024 ** 3), 4)
+            result["size_gb"] = round(result["size_bytes"] / (1024**3), 4)
             result["sha256"] = sha256_file(local_path)
 
         except Exception as error:
@@ -659,17 +755,17 @@ def download_raw_files(
 
     download_results_df = pd.DataFrame(download_results)
 
-    download_summary = (
-        download_results_df
-        .groupby(["source_kind", "status"], as_index=False)
-        .agg(files=("file_name", "count"), gb=("size_gb", "sum"))
-    )
+    download_summary = download_results_df.groupby(
+        ["source_kind", "status"], as_index=False
+    ).agg(files=("file_name", "count"), gb=("size_gb", "sum"))
     print_dataframe(download_summary, "Resultado de descarga", max_rows=30)
 
     failed_downloads = download_results_df[download_results_df["status"] == "failed"]
     if not failed_downloads.empty:
         print_dataframe(
-            failed_downloads[["source_kind", "year", "month", "trip_type", "file_name", "error"]],
+            failed_downloads[
+                ["source_kind", "year", "month", "trip_type", "file_name", "error"]
+            ],
             "Errores de descarga",
             max_rows=50,
         )
@@ -682,6 +778,7 @@ def download_raw_files(
 # ============================================================
 # 7. METADATA VALIDATOR
 # ============================================================
+
 
 def parquet_signature_ok(file_path: Path) -> bool:
     if not file_path.exists() or file_path.stat().st_size < 8:
@@ -732,14 +829,22 @@ def read_schema_with_spark(spark: Any, path: Path) -> dict[str, Any]:
     }
 
 
-def validate_trip_parquet_files(config: PipelineConfig, spark: Any, catalog_df: pd.DataFrame, run_id: str) -> pd.DataFrame:
+def validate_trip_parquet_files(
+    config: PipelineConfig, spark: Any, catalog_df: pd.DataFrame, run_id: str
+) -> pd.DataFrame:
     available_files_df = catalog_df[catalog_df["source_kind"] == "trip_data"].copy()
-    available_files_df["exists_local"] = available_files_df["local_path"].apply(lambda value: Path(value).exists())
+    available_files_df["exists_local"] = available_files_df["local_path"].apply(
+        lambda value: Path(value).exists()
+    )
     available_files_df = available_files_df[available_files_df["exists_local"]].copy()
 
     metadata_records = []
 
-    for _, row in tqdm(available_files_df.iterrows(), total=len(available_files_df), desc="Validando Parquet"):
+    for _, row in tqdm(
+        available_files_df.iterrows(),
+        total=len(available_files_df),
+        desc="Validando Parquet",
+    ):
         file_path = Path(row["local_path"])
 
         result = {
@@ -775,7 +880,7 @@ def validate_trip_parquet_files(config: PipelineConfig, spark: Any, catalog_df: 
 
             pq_file = pq.ParquetFile(file_path)
             result["size_bytes"] = int(size_bytes)
-            result["size_gb"] = round(size_bytes / (1024 ** 3), 4)
+            result["size_gb"] = round(size_bytes / (1024**3), 4)
             result["records"] = int(pq_file.metadata.num_rows)
             result["sha256"] = sha256_file(file_path)
 
@@ -784,7 +889,10 @@ def validate_trip_parquet_files(config: PipelineConfig, spark: Any, catalog_df: 
             result["spark_read_path"] = spark_validation["spark_read_path"]
 
             if spark_validation["spark_status"] != "valid":
-                raise RuntimeError("PySpark no pudo leer el archivo: " + str(spark_validation["spark_error"]))
+                raise RuntimeError(
+                    "PySpark no pudo leer el archivo: "
+                    + str(spark_validation["spark_error"])
+                )
 
             result["validation_status"] = "valid"
 
@@ -798,10 +906,18 @@ def validate_trip_parquet_files(config: PipelineConfig, spark: Any, catalog_df: 
         raise RuntimeError("No hay archivos Parquet locales para validar.")
 
     print_dataframe(
-        metadata_df[[
-            "year", "month", "trip_type", "file_name", "validation_status",
-            "size_gb", "records", "validation_error",
-        ]],
+        metadata_df[
+            [
+                "year",
+                "month",
+                "trip_type",
+                "file_name",
+                "validation_status",
+                "size_gb",
+                "records",
+                "validation_error",
+            ]
+        ],
         "Metadata Parquet validada",
         max_rows=80,
     )
@@ -816,11 +932,17 @@ def validate_trip_parquet_files(config: PipelineConfig, spark: Any, catalog_df: 
         raise RuntimeError(f"Hay {len(invalid_df)} archivo(s) Parquet inválidos.")
 
     valid_metadata_df = metadata_df[metadata_df["validation_status"] == "valid"].copy()
-    print_panel("Metadata validator", f"Archivos Parquet válidos: {len(valid_metadata_df)}", "green")
+    print_panel(
+        "Metadata validator",
+        f"Archivos Parquet válidos: {len(valid_metadata_df)}",
+        "green",
+    )
     return valid_metadata_df
 
 
-def validate_lookup_csv(config: PipelineConfig, lookup_record: dict[str, Any] | None, run_id: str) -> pd.DataFrame:
+def validate_lookup_csv(
+    config: PipelineConfig, lookup_record: dict[str, Any] | None, run_id: str
+) -> pd.DataFrame:
     if lookup_record is None:
         return pd.DataFrame()
 
@@ -860,16 +982,20 @@ def validate_lookup_csv(config: PipelineConfig, lookup_record: dict[str, Any] | 
             csv.Sniffer().sniff(sample)
 
         lookup_df = pd.read_csv(file_path)
-        missing_columns = [col for col in LOOKUP_EXPECTED_COLUMNS if col not in lookup_df.columns]
+        missing_columns = [
+            col for col in LOOKUP_EXPECTED_COLUMNS if col not in lookup_df.columns
+        ]
         if missing_columns:
-            raise RuntimeError(f"Faltan columnas esperadas en lookup: {missing_columns}")
+            raise RuntimeError(
+                f"Faltan columnas esperadas en lookup: {missing_columns}"
+            )
         if lookup_df.empty:
             raise RuntimeError("El lookup no contiene registros.")
         if lookup_df["LocationID"].duplicated().any():
             raise RuntimeError("LocationID contiene duplicados en lookup.")
 
         result["size_bytes"] = int(size_bytes)
-        result["size_gb"] = round(size_bytes / (1024 ** 3), 4)
+        result["size_gb"] = round(size_bytes / (1024**3), 4)
         result["records"] = int(len(lookup_df))
         result["sha256"] = sha256_file(file_path)
         result["validation_status"] = "valid"
@@ -879,13 +1005,23 @@ def validate_lookup_csv(config: PipelineConfig, lookup_record: dict[str, Any] | 
 
     lookup_metadata_df = pd.DataFrame([result])
     print_dataframe(
-        lookup_metadata_df[["source_kind", "file_name", "validation_status", "records", "validation_error"]],
+        lookup_metadata_df[
+            [
+                "source_kind",
+                "file_name",
+                "validation_status",
+                "records",
+                "validation_error",
+            ]
+        ],
         "Metadata Lookup validada",
         max_rows=10,
     )
 
     if result["validation_status"] != "valid":
-        raise RuntimeError("Taxi Zone Lookup inválido: " + str(result["validation_error"]))
+        raise RuntimeError(
+            "Taxi Zone Lookup inválido: " + str(result["validation_error"])
+        )
 
     return lookup_metadata_df
 
@@ -893,6 +1029,7 @@ def validate_lookup_csv(config: PipelineConfig, lookup_record: dict[str, Any] | 
 # ============================================================
 # 8. CARGA BRONZE
 # ============================================================
+
 
 def bronze_output_path(config: PipelineConfig, row: pd.Series) -> Path:
     if row["source_kind"] == "trip_data":
@@ -931,28 +1068,30 @@ def load_bronze(
         # Bronze conserva el archivo publicado sin modificar su contenido.
         shutil.copy2(input_path, output_file)
 
-        bronze_audit_records.append({
-            "pipeline_id": run_id,
-            "pipeline_name": config.pipeline_name,
-            "pipeline_version": config.pipeline_version,
-            "fecha_ingesta": run_date,
-            "hora_ingesta": run_time,
-            "source_kind": row["source_kind"],
-            "anio": None if pd.isna(row.get("year")) else int(row["year"]),
-            "mes": None if pd.isna(row.get("month")) else int(row["month"]),
-            "tipo_dataset": row["trip_type"],
-            "nombre_archivo": row["file_name"],
-            "formato": row["format"],
-            "raw_path": str(input_path),
-            "bronze_path": str(output_file),
-            "size_bytes": int(row["size_bytes"]),
-            "size_gb": float(row["size_gb"]),
-            "records": None if pd.isna(row.get("records")) else int(row["records"]),
-            "hash_archivo": row["sha256"],
-            "spark_schema_json": row.get("spark_schema_json"),
-            "spark_read_path": row.get("spark_read_path"),
-            "bronze_status": "loaded",
-        })
+        bronze_audit_records.append(
+            {
+                "pipeline_id": run_id,
+                "pipeline_name": config.pipeline_name,
+                "pipeline_version": config.pipeline_version,
+                "fecha_ingesta": run_date,
+                "hora_ingesta": run_time,
+                "source_kind": row["source_kind"],
+                "anio": None if pd.isna(row.get("year")) else int(row["year"]),
+                "mes": None if pd.isna(row.get("month")) else int(row["month"]),
+                "tipo_dataset": row["trip_type"],
+                "nombre_archivo": row["file_name"],
+                "formato": row["format"],
+                "raw_path": str(input_path),
+                "bronze_path": str(output_file),
+                "size_bytes": int(row["size_bytes"]),
+                "size_gb": float(row["size_gb"]),
+                "records": None if pd.isna(row.get("records")) else int(row["records"]),
+                "hash_archivo": row["sha256"],
+                "spark_schema_json": row.get("spark_schema_json"),
+                "spark_read_path": row.get("spark_read_path"),
+                "bronze_status": "loaded",
+            }
+        )
 
     bronze_audit_df = pd.DataFrame(bronze_audit_records)
 
@@ -969,9 +1108,17 @@ def load_bronze(
     pq.write_table(pa.Table.from_pandas(bronze_audit_df), bronze_audit_parquet)
 
     print_dataframe(
-        bronze_audit_df[[
-            "source_kind", "anio", "mes", "tipo_dataset", "nombre_archivo", "records", "bronze_status",
-        ]],
+        bronze_audit_df[
+            [
+                "source_kind",
+                "anio",
+                "mes",
+                "tipo_dataset",
+                "nombre_archivo",
+                "records",
+                "bronze_status",
+            ]
+        ],
         "Carga Bronze",
         max_rows=80,
     )
@@ -984,6 +1131,7 @@ def load_bronze(
 # 9. VALIDACIONES FINALES Y RESUMEN
 # ============================================================
 
+
 def validate_final_completeness(
     config: PipelineConfig,
     run_catalog_df: pd.DataFrame,
@@ -992,19 +1140,32 @@ def validate_final_completeness(
     bronze_audit_df: pd.DataFrame,
 ) -> None:
     expected_count = len(run_catalog_df)
-    downloaded_count = len(download_results_df[download_results_df["status"].isin(["downloaded", "skipped_existing"])])
-    validated_count = len(valid_metadata_df[valid_metadata_df["validation_status"] == "valid"])
+    downloaded_count = len(
+        download_results_df[
+            download_results_df["status"].isin(["downloaded", "skipped_existing"])
+        ]
+    )
+    validated_count = len(
+        valid_metadata_df[valid_metadata_df["validation_status"] == "valid"]
+    )
     bronze_count = len(bronze_audit_df[bronze_audit_df["bronze_status"] == "loaded"])
 
-    checks_df = pd.DataFrame([
-        ["archivos_en_catalogo_ejecucion", expected_count],
-        ["descargados_o_existentes", downloaded_count],
-        ["validados", validated_count],
-        ["cargados_bronze", bronze_count],
-    ], columns=["control", "valor"])
+    checks_df = pd.DataFrame(
+        [
+            ["archivos_en_catalogo_ejecucion", expected_count],
+            ["descargados_o_existentes", downloaded_count],
+            ["validados", validated_count],
+            ["cargados_bronze", bronze_count],
+        ],
+        columns=["control", "valor"],
+    )
     print_dataframe(checks_df, "Control final de completitud", max_rows=20)
 
-    if downloaded_count != expected_count or validated_count != expected_count or bronze_count != expected_count:
+    if (
+        downloaded_count != expected_count
+        or validated_count != expected_count
+        or bronze_count != expected_count
+    ):
         raise RuntimeError(
             "La ejecución no está completa: catálogo, descarga, validación y bronze no tienen el mismo conteo."
         )
@@ -1026,46 +1187,57 @@ def print_final_summary(
     valid_metadata_df: pd.DataFrame,
     bronze_audit_df: pd.DataFrame,
 ) -> None:
-    final_summary = pd.DataFrame([
-        ["pipeline_id", run_id],
-        ["workspace_dir", config.workspace_dir],
-        ["raw_dir", config.raw_dir],
-        ["bronze_files_dir", config.bronze_files_dir],
-        ["bronze_metadata_dir", config.bronze_metadata_dir],
-        ["manifest_jsonl", config.manifest_jsonl],
-        ["archivos_catalogados_total_trip_data", len(catalog_df)],
-        ["archivos_catalogados_ejecucion", len(run_catalog_df)],
-        ["archivos_descargados_o_existentes", len(download_results_df)],
-        ["archivos_validados", len(valid_metadata_df)],
-        ["archivos_bronze", len(bronze_audit_df)],
-        ["bronze_audit_jsonl", config.bronze_metadata_dir / "bronze_audit.jsonl"],
-        ["bronze_audit_parquet", config.bronze_metadata_dir / "bronze_audit.parquet"],
-    ], columns=["métrica", "valor"])
+    final_summary = pd.DataFrame(
+        [
+            ["pipeline_id", run_id],
+            ["workspace_dir", config.workspace_dir],
+            ["raw_dir", config.raw_dir],
+            ["bronze_files_dir", config.bronze_files_dir],
+            ["bronze_metadata_dir", config.bronze_metadata_dir],
+            ["manifest_jsonl", config.manifest_jsonl],
+            ["archivos_catalogados_total_trip_data", len(catalog_df)],
+            ["archivos_catalogados_ejecucion", len(run_catalog_df)],
+            ["archivos_descargados_o_existentes", len(download_results_df)],
+            ["archivos_validados", len(valid_metadata_df)],
+            ["archivos_bronze", len(bronze_audit_df)],
+            ["bronze_audit_jsonl", config.bronze_metadata_dir / "bronze_audit.jsonl"],
+            [
+                "bronze_audit_parquet",
+                config.bronze_metadata_dir / "bronze_audit.parquet",
+            ],
+        ],
+        columns=["métrica", "valor"],
+    )
 
     print_dataframe(final_summary, "Resumen final", max_rows=30)
     print_panel("Ejecución finalizada", "Nivel 2 y Nivel 3 completados.", "green")
 
 
 def print_active_config(config: PipelineConfig) -> None:
-    config_df = pd.DataFrame([
-        ["YEARS", config.years],
-        ["TRIP_TYPES", config.trip_types],
-        ["SELECTED_TRIP_TYPES", config.selected_trip_types],
-        ["MAX_FILES", config.max_files],
-        ["OVERWRITE_RAW", config.overwrite_raw],
-        ["STRICT_COMPLETENESS", config.strict_completeness],
-        ["INCLUDE_LOOKUP", config.include_lookup],
-        ["WORKSPACE_DIR", config.workspace_dir],
-        ["RAW_DIR", config.raw_dir],
-        ["BRONZE_DIR", config.bronze_dir],
-        ["MANIFEST_JSONL", config.manifest_jsonl],
-    ], columns=["parámetro", "valor"])
+    config_df = pd.DataFrame(
+        [
+            ["YEARS", config.years],
+            ["TRIP_TYPES", config.trip_types],
+            ["SELECTED_TRIP_TYPES", config.selected_trip_types],
+            ["MAX_FILES", config.max_files],
+            ["OVERWRITE_RAW", config.overwrite_raw],
+            ["STRICT_COMPLETENESS", config.strict_completeness],
+            ["INCLUDE_LOOKUP", config.include_lookup],
+            ["FORBIDDEN_COOLDOWN_SECONDS", config.forbidden_cooldown_seconds],
+            ["WORKSPACE_DIR", config.workspace_dir],
+            ["RAW_DIR", config.raw_dir],
+            ["BRONZE_DIR", config.bronze_dir],
+            ["MANIFEST_JSONL", config.manifest_jsonl],
+        ],
+        columns=["parámetro", "valor"],
+    )
     print_dataframe(config_df, "Parámetros activos", max_rows=30)
 
 
 # ============================================================
 # 10. MAIN
 # ============================================================
+
 
 def main() -> int:
     config = parse_args()
@@ -1081,7 +1253,11 @@ def main() -> int:
 
     configure_java_and_spark_env()
     print_panel("JAVA_HOME", os.environ.get("JAVA_HOME", "No configurado"), "blue")
-    print_panel("HADOOP_HOME", os.environ.get("HADOOP_HOME", "No configurado. No se usará Spark write local."), "blue")
+    print_panel(
+        "HADOOP_HOME",
+        os.environ.get("HADOOP_HOME", "No configurado. No se usará Spark write local."),
+        "blue",
+    )
 
     spark = None
     try:
@@ -1089,16 +1265,19 @@ def main() -> int:
 
         full_trip_catalog_df = build_trip_catalog(config)
         if full_trip_catalog_df.empty:
-            raise RuntimeError("El catálogo de trip data quedó vacío. Revisa years/trip-types o conectividad.")
+            raise RuntimeError(
+                "El catálogo de trip data quedó vacío. Revisa years/trip-types o conectividad."
+            )
 
         summary_df = (
-            full_trip_catalog_df
-            .groupby(["year", "trip_type"], as_index=False)
+            full_trip_catalog_df.groupby(["year", "trip_type"], as_index=False)
             .agg(files=("file_name", "count"))
             .sort_values(["year", "trip_type"])
         )
         print_dataframe(summary_df, "Catálogo detectado", max_rows=100)
-        print_dataframe(full_trip_catalog_df, "Archivos trip data catalogados", max_rows=40)
+        print_dataframe(
+            full_trip_catalog_df, "Archivos trip data catalogados", max_rows=40
+        )
 
         validate_closed_year_coverage(config, full_trip_catalog_df)
 
@@ -1114,11 +1293,17 @@ def main() -> int:
 
         download_results_df = download_raw_files(config, run_catalog_df, run_id, run_ts)
 
-        trip_metadata_df = validate_trip_parquet_files(config, spark, run_trip_catalog_df, run_id)
+        trip_metadata_df = validate_trip_parquet_files(
+            config, spark, run_trip_catalog_df, run_id
+        )
         lookup_metadata_df = validate_lookup_csv(config, lookup_record, run_id)
 
-        valid_metadata_df = pd.concat([trip_metadata_df, lookup_metadata_df], ignore_index=True)
-        bronze_audit_df = load_bronze(config, valid_metadata_df, run_id, run_date, run_time)
+        valid_metadata_df = pd.concat(
+            [trip_metadata_df, lookup_metadata_df], ignore_index=True
+        )
+        bronze_audit_df = load_bronze(
+            config, valid_metadata_df, run_id, run_date, run_time
+        )
 
         validate_final_completeness(
             config,
