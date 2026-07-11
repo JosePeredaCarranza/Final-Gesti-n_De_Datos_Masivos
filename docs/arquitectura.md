@@ -16,7 +16,7 @@ Repositorio de Parquet crudos controlados y auditados.
 
 ## Nivel 4 — Silver
 
-Limpieza, normalización, tipado y enriquecimiento.
+Consolidacion de datos, Profiling, Analisis de calidad de datos, Limpieza, normalización, tipado y enriquecimiento.
 
 ## Nivel 5 — Gold
 
