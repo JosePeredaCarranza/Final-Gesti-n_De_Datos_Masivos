@@ -7,7 +7,7 @@ cd src/silver
 
 # Script 1: Profiling de BRONZE
 cd 01_profiling_inicial
-python profiling_bronze.py --taxi all --years 2026
+python profiling_inicial.py --taxi all --years 2026
 
 # Script 2: Detectar cambios de esquema
 cd ../02_detect_schema_changes
