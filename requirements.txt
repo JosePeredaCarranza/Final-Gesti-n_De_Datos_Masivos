@@ -6,3 +6,4 @@ rich
 tqdm
 ipykernel
 jupyterlab
+pymongo>=4.8,<5
