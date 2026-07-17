@@ -94,6 +94,11 @@ TRIP_TYPE_PREFIX = {
 
 LOOKUP_EXPECTED_COLUMNS = ["LocationID", "Borough", "Zone", "service_zone"]
 
+# La raíz se deriva de la ubicación del archivo, no del directorio actual.
+# tlc_ingestion_nivel_2_3.py -> ingestion -> src -> raíz del repositorio.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_WORKSPACE_DIR = PROJECT_ROOT / "data"
+
 console = Console() if Console else None
 
 
@@ -206,8 +211,11 @@ def parse_args() -> PipelineConfig:
     parser.add_argument(
         "--workspace-dir",
         type=Path,
-        default=Path.cwd() / "../../data",
-        help="Directorio base donde se crearán raw, bronze y logs.",
+        default=DEFAULT_WORKSPACE_DIR,
+        help=(
+            "Directorio base donde se crearán raw, bronze y logs. "
+            "Por defecto usa <raíz-del-proyecto>/data."
+        ),
     )
     parser.add_argument(
         "--overwrite-raw",
@@ -243,7 +251,7 @@ def parse_args() -> PipelineConfig:
         overwrite_raw=args.overwrite_raw,
         strict_completeness=not args.no_strict_completeness,
         include_lookup=not args.no_lookup,
-        workspace_dir=args.workspace_dir,
+        workspace_dir=args.workspace_dir.resolve(),
         forbidden_cooldown_seconds=args.cooldown_minutes * 60,
     )
 
@@ -509,11 +517,6 @@ def configure_java_and_spark_env() -> None:
         if detected_java:
             os.environ["JAVA_HOME"] = detected_java
             os.environ["PATH"] = detected_java + r"\bin;" + os.environ["PATH"]
-
-        if Path(r"C:\hadoop\bin").exists():
-            os.environ["HADOOP_HOME"] = r"C:\hadoop"
-            os.environ["hadoop.home.dir"] = r"C:\hadoop"
-            os.environ["PATH"] = r"C:\hadoop\bin;" + os.environ["PATH"]
 
     os.environ["SPARK_LOCAL_IP"] = "127.0.0.1"
     os.environ["SPARK_LOCAL_HOSTNAME"] = "localhost"

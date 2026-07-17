@@ -21,8 +21,8 @@ ROOT_DIR = Path(__file__).parent.parent.parent.parent
 
 # Parche de Hadoop para Windows
 if os.name == 'nt':
-    os.environ["HADOOP_HOME"] = "C:\\hadoop"
-    os.environ["PATH"] = os.environ.get("PATH", "") + ";C:\\hadoop\\bin"
+    pass  # Hadoop lo configura command_runner.py
+    pass  # Hadoop lo configura command_runner.py
 
 # Configuración de Spark
 SPARK_CONFIG = {

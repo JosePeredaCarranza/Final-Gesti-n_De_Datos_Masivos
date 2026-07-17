@@ -1,58 +1,49 @@
-# Entorno Python
+# Entornos virtuales
 .venv/
+.venv311/
 venv/
 env/
+
+# Python
 __pycache__/
 *.py[cod]
-.ipynb_checkpoints/
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# IDE y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Datos
+data/raw/
+data/bronze/
+data/silver/
+data/gold/
+data/logs/
+
+# Auditoría generada
+audit/runtime/
+
+# Logs del pipeline
+logs/pipeline/
+
+# Backups temporales
+*.bak
+*.bak-*
+*.tmp
+
+# Salidas de pruebas
+data/_spark_write_test/
+
+# Archivos grandes y comprimidos
+*.zip
+*.7z
+*.rar
 
 # Variables locales
 .env
 .env.local
-
-# Datos grandes
-data/raw/**
-data/bronze/**
-data/silver/**/*.json
-data/silver/**/*.parquet
-!data/silver/**/.gitkeep
-data/gold/**
-data/landing/**
-data/staging/**
-
-# Mantener estructura vacía
-!**/.gitkeep
-
-# Logs y auditoría generados
-logs/**
-audit/**/*.jsonl
-audit/**/*.parquet
-audit/**/*.csv
-
-# Mantener carpetas de auditoría
-!logs/.gitkeep
-!audit/**/.gitkeep
-
-# Archivos temporales
-*.tmp
-*.part
-*.bak
-*.crc
-_SUCCESS
-_committed_*
-_started_*
-
-# Spark
-.hadoop/
-spark-warehouse/
-metastore_db/
-derby.log
-
-# Power BI / Office temporales
-~$*
-*.tmp
-
-# Sistema operativo
-.DS_Store
-Thumbs.db

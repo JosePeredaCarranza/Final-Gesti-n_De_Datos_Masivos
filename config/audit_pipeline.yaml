@@ -1,0 +1,198 @@
+pipeline:
+  name: nyc_tlc_pipeline
+  version: "1.5.1"
+  environment: local
+  audit_root: audit/runtime
+  logs_root: logs/pipeline
+
+stages:
+  - name: INGESTION
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/ingestion/tlc_ingestion_nivel_2_3.py"
+      - "--years"
+      - "{years}"
+      - "--trip-types"
+      - "{taxi}"
+      - "--max-files"
+      - "none"
+      - "--workspace-dir"
+      - "data"
+
+    artifact_roots:
+      - "data/logs"
+      - "data/raw"
+      - "data/bronze"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.csv"
+      - "*.parquet"
+
+    required_outputs:
+      - root: "data/bronze/files/trip_data"
+        pattern: "*.parquet"
+        minimum_files: 1
+        recursive: true
+
+      - root: "data/bronze/files/lookup"
+        pattern: "taxi_zone_lookup.csv"
+        minimum_files: 1
+        recursive: true
+
+  - name: SILVER_01_PROFILING_INICIAL
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/silver/01_profiling_inicial/profiling_inicial.py"
+      - "--taxi"
+      - "{taxi}"
+      - "--years"
+      - "{years}"
+
+    artifact_roots:
+      - "data/silver"
+      - "data/logs"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+  - name: SILVER_02_SCHEMA_CHANGES
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/silver/02_detect_schema_changes/detect_schema_changes.py"
+      - "--taxi"
+      - "{taxi}"
+      - "--years"
+      - "{years}"
+
+    artifact_roots:
+      - "data/silver"
+      - "data/logs"
+      - "config"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+  - name: SILVER_03_UNIFIED_SCHEMA
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/silver/03_generate_unified_schema/generate_unified_schema.py"
+      - "--taxi"
+      - "{taxi}"
+
+    artifact_roots:
+      - "data/silver"
+      - "data/logs"
+      - "config"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+  - name: SILVER_04_BRONZE_TO_SILVER
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/silver/04_limpieza/bronze_to_silver.py"
+      - "--taxi"
+      - "{taxi}"
+      - "--years"
+      - "{years}"
+      - "--force"
+
+    artifact_roots:
+      - "data/silver"
+      - "data/logs"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+    required_outputs:
+      - root: "data/silver/cleaned"
+        pattern: "*.parquet"
+        minimum_files: 1
+        recursive: true
+
+      - root: "data/silver/lookup/taxi_zone_lookup.parquet"
+        pattern: "*.parquet"
+        minimum_files: 1
+        recursive: true
+
+  - name: SILVER_05_QUALITY_ANALYSIS
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/silver/05_analisis_de_calidad/quality_analysis.py"
+      - "--taxi"
+      - "{taxi}"
+      - "--years"
+      - "{years}"
+      - "{force_quality}"
+
+    artifact_roots:
+      - "data/silver"
+      - "data/logs"
+      - "audit/runtime"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+    required_outputs:
+      - root: "data/silver/quality/_quality_reports"
+        pattern: "*_quality_report.json"
+        minimum_files: 1
+        recursive: true
+
+  - name: SILVER_06_PROFILING_FINAL
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/silver/06_profiling_final/profiling_final.py"
+      - "--taxi"
+      - "{taxi}"
+      - "--years"
+      - "{years}"
+      - "--force"
+
+    artifact_roots:
+      - "data/silver"
+      - "data/logs"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+    required_outputs:
+      - root: "data/silver/profiling_final/_profiles"
+        pattern: "*.json"
+        minimum_files: 1
+        recursive: true

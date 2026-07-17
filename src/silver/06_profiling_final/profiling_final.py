@@ -22,8 +22,8 @@ from pyspark.sql import functions as F
 ROOT_DIR = Path(__file__).parent.parent.parent.parent
 
 if os.name == 'nt':
-    os.environ["HADOOP_HOME"] = "C:\\hadoop"
-    os.environ["PATH"] = os.environ.get("PATH", "") + ";C:\\hadoop\\bin"
+    pass  # Hadoop lo configura command_runner.py
+    pass  # Hadoop lo configura command_runner.py
 
 # Tipos de taxi activos (excluye FHVHV por defecto)
 TAXI_TYPES_ACTIVE = ["fhv", "green", "yellow"]

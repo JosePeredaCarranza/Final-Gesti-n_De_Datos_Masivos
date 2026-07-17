@@ -1,0 +1,4 @@
+PyYAML>=6,<7
+pandas>=2.2,<3
+pyarrow>=15,<22
+pytest>=8,<9
