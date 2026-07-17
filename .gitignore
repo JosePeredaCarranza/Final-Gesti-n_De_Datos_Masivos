@@ -14,7 +14,9 @@ __pycache__/
 # Datos grandes
 data/raw/**
 data/bronze/**
-data/silver/**
+data/silver/**/*.json
+data/silver/**/*.parquet
+!data/silver/**/.gitkeep
 data/gold/**
 data/landing/**
 data/staging/**
