@@ -42,6 +42,7 @@ _committed_*
 _started_*
 
 # Spark
+.hadoop/
 spark-warehouse/
 metastore_db/
 derby.log
