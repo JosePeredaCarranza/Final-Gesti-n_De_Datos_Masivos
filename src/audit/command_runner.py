@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import queue
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +62,7 @@ class AuditedCommandRunner:
         audit: AuditManager,
         pipeline_id: str,
         logs_root: str = "logs/pipeline",
+        live_output: bool = False,
     ) -> None:
         self.project_root = Path(
             project_root,
@@ -68,12 +71,97 @@ class AuditedCommandRunner:
         self.audit = audit
         self.pipeline_id = pipeline_id
 
+        self.live_output = live_output
+
         self.logs_dir = (self.project_root / logs_root / pipeline_id).resolve()
 
         self.logs_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
+
+    def _execute_process(
+        self,
+        command: Sequence[str],
+        child_environment: dict[str, str],
+        stdout_file: Any,
+        stderr_file: Any,
+        stage_name: str,
+    ) -> int:
+        """Ejecuta una etapa y, opcionalmente, replica su salida en consola."""
+        if not self.live_output:
+            completed_process = subprocess.run(
+                list(command),
+                cwd=(self.project_root),
+                env=(child_environment),
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            return completed_process.returncode
+
+        child_environment = {
+            **child_environment,
+            "PYTHONUNBUFFERED": "1",
+        }
+        process = subprocess.Popen(
+            list(command),
+            cwd=(self.project_root),
+            env=(child_environment),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+        messages: queue.Queue[tuple[str, str]] = queue.Queue()
+
+        def copy_stream(
+            stream: Any,
+            destination: Any,
+            stream_name: str,
+        ) -> None:
+            try:
+                for line in iter(stream.readline, ""):
+                    destination.write(line)
+                    destination.flush()
+                    messages.put((stream_name, line))
+            finally:
+                stream.close()
+
+        readers = [
+            threading.Thread(
+                target=copy_stream,
+                args=(process.stdout, stdout_file, "OUT"),
+                daemon=True,
+            ),
+            threading.Thread(
+                target=copy_stream,
+                args=(process.stderr, stderr_file, "ERR"),
+                daemon=True,
+            ),
+        ]
+        for reader in readers:
+            reader.start()
+
+        while any(reader.is_alive() for reader in readers) or not messages.empty():
+            try:
+                stream_name, line = messages.get(timeout=0.15)
+            except queue.Empty:
+                continue
+            print(
+                f"  [{stage_name}][{stream_name}] {line}",
+                end="",
+                flush=True,
+            )
+
+        for reader in readers:
+            reader.join()
+        return process.wait()
 
     @staticmethod
     def _safe_name(
@@ -551,19 +639,13 @@ class AuditedCommandRunner:
                     encoding="utf-8",
                 ) as stderr_file,
             ):
-                completed_process = subprocess.run(
-                    list(command),
-                    cwd=(self.project_root),
-                    env=(child_environment),
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
+                process_return_code = self._execute_process(
+                    command=command,
+                    child_environment=child_environment,
+                    stdout_file=stdout_file,
+                    stderr_file=stderr_file,
+                    stage_name=stage_name,
                 )
-
-            process_return_code = completed_process.returncode
 
             if process_return_code != 0:
                 raise RuntimeError(

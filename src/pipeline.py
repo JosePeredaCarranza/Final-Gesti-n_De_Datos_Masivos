@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,15 @@ def parse_arguments() -> argparse.Namespace:
 
     parser.add_argument(
         "--to-stage",
+    )
+
+    parser.add_argument(
+        "--live-output",
+        action="store_true",
+        help=(
+            "Muestra en consola la salida de cada script mientras también "
+            "se guarda en logs/pipeline/."
+        ),
     )
 
     return parser.parse_args()
@@ -241,6 +251,7 @@ def main() -> int:
             "skip_ingestion": (arguments.skip_ingestion),
             "from_stage": (arguments.from_stage),
             "to_stage": (arguments.to_stage),
+            "live_output": (arguments.live_output),
             "configuration": str(
                 configuration_path,
             ),
@@ -257,6 +268,7 @@ def main() -> int:
                 "logs/pipeline",
             )
         ),
+        live_output=(arguments.live_output),
     )
 
     stage_results = []
@@ -268,7 +280,19 @@ def main() -> int:
             to_stage=(arguments.to_stage),
         )
 
-        for stage in selected_stages:
+        print("=" * 72, flush=True)
+        print(f"Pipeline: {pipeline_id}", flush=True)
+        print(f"Años: {', '.join(map(str, arguments.years))}", flush=True)
+        print(f"Tipos de taxi: {', '.join(arguments.taxi)}", flush=True)
+        print(f"Etapas seleccionadas: {len(selected_stages)}", flush=True)
+        print(
+            "Salida interna en vivo: "
+            + ("activada" if arguments.live_output else "desactivada"),
+            flush=True,
+        )
+        print("=" * 72, flush=True)
+
+        for stage_index, stage in enumerate(selected_stages, start=1):
             stage_name = str(
                 stage["name"],
             )
@@ -288,6 +312,15 @@ def main() -> int:
                 years=arguments.years,
                 taxi_types=(arguments.taxi),
                 force_quality=(arguments.force_quality),
+            )
+
+            print(
+                f"[{stage_index}/{len(selected_stages)}] INICIANDO {stage_name}",
+                flush=True,
+            )
+            print(
+                f"  Comando: {subprocess.list2cmdline(command)}",
+                flush=True,
             )
 
             result = runner.run(
@@ -327,6 +360,13 @@ def main() -> int:
 
             stage_results.append(
                 result,
+            )
+
+            print(
+                f"[{stage_index}/{len(selected_stages)}] {result.status} "
+                f"{stage_name} | {result.duration_seconds:.2f} s | "
+                f"{result.artifacts_detected} artefactos",
+                flush=True,
             )
 
             if result.status == "FAILED":
