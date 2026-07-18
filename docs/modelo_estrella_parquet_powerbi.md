@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-El notebook `notebooks/gold/modelo_estrella_parquet_powerbi.ipynb` transforma los conjuntos normalizados de `data/silver/trip_data_normalized` en dimensiones y una tabla de hechos agregada almacenadas en Parquet.
+El script `src/gold/build_modelo_estrella.py` transforma los conjuntos normalizados de `data/silver/trip_data_normalized` en dimensiones y una tabla de hechos agregada almacenadas en Parquet. El notebook `notebooks/gold/modelo_estrella_parquet_powerbi.ipynb` se conserva como referencia exploratoria.
 
 El flujo implementado es:
 
@@ -103,12 +103,15 @@ Este mecanismo evita volver a leer todos los viajes crudos y evita duplicar una 
 
 ## Primera ejecucion
 
-1. Abrir `notebooks/gold/modelo_estrella_parquet_powerbi.ipynb` en VS Code.
-2. Seleccionar el mismo entorno Python/PySpark utilizado para Silver.
-3. Verificar que `FORCE_REPROCESS_ALL = False` y `FORCE_REBUILD_OUTPUTS = False`.
-4. Ejecutar todas las celdas.
-5. Esperar el mensaje `Gold publicado correctamente`.
-6. Revisar `data/logs/gold_parquet_audit.jsonl` si ocurre un error.
+1. Ejecutar `python src/gold/build_modelo_estrella.py --taxi all --years 2026` desde la raíz del proyecto.
+2. Esperar el mensaje `Gold publicado`.
+3. Revisar `data/logs/gold_parquet_audit.jsonl` si ocurre un error.
+
+Para forzar el reproceso de las entradas seleccionadas y republicar el modelo:
+
+```powershell
+python src/gold/build_modelo_estrella.py --taxi all --years 2026 --force-reprocess --force-rebuild
+```
 
 La primera ejecucion procesa todas las fuentes porque el manifiesto aun no existe. Las siguientes procesan solamente entradas nuevas o modificadas.
 
@@ -144,9 +147,9 @@ Todas las relaciones son `1:*`, con filtro simple desde la dimension hacia los h
 
 ## Automatizacion local de Gold
 
-El script `scripts/run_gold_notebook.ps1` ejecuta el notebook completo con Jupyter.
+La alternativa heredada `scripts/run_gold_notebook.ps1` ejecuta el notebook con Jupyter. Para el pipeline y las ejecuciones normales utiliza el script Python.
 
-Prueba manual:
+Prueba manual heredada:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File ".\scripts\run_gold_notebook.ps1"

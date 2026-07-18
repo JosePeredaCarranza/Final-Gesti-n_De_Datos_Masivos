@@ -140,6 +140,34 @@ stages:
         minimum_files: 1
         recursive: true
 
+  - name: SILVER_B1_NORMALIZATION
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/silver/05_normalizacion_b1/normalizacion_b1.py"
+      - "--taxi"
+      - "{taxi}"
+      - "--years"
+      - "{years}"
+      - "--force"
+
+    artifact_roots:
+      - "data/silver/trip_data_normalized"
+      - "data/logs"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+    required_outputs:
+      - root: "data/silver/trip_data_normalized"
+        pattern: "*.parquet"
+        minimum_files: 1
+        recursive: true
+
   - name: SILVER_05_QUALITY_ANALYSIS
     enabled: true
     continue_on_error: false
@@ -195,4 +223,36 @@ stages:
       - root: "data/silver/profiling_final/_profiles"
         pattern: "*.json"
         minimum_files: 1
+        recursive: true
+
+  - name: GOLD_MODELO_ESTRELLA
+    enabled: true
+    continue_on_error: false
+
+    command:
+      - "{python}"
+      - "src/gold/build_modelo_estrella.py"
+      - "--taxi"
+      - "{taxi}"
+      - "--years"
+      - "{years}"
+
+    artifact_roots:
+      - "data/gold/modelo_estrella"
+      - "data/logs"
+
+    artifact_patterns:
+      - "*.jsonl"
+      - "*.json"
+      - "*.parquet"
+
+    required_outputs:
+      - root: "data/gold/modelo_estrella/hechos/fact_viajes_agregados.parquet"
+        pattern: "*.parquet"
+        minimum_files: 1
+        recursive: true
+
+      - root: "data/gold/modelo_estrella/dimensiones"
+        pattern: "*.parquet"
+        minimum_files: 10
         recursive: true

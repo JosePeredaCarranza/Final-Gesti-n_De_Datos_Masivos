@@ -1,39 +1,26 @@
-# PIPELINE EN VIVO
-# 1. Primero, asegurarte de que los datos de 2026 están descargados en BRONZE
-# (Esto lo hace el script de ingesta)
+# Pipeline Silver
 
-# 2. Ejecutar TODOS los scripts en orden para 2026
-cd src/silver
+Ejecuta los comandos desde la raíz del proyecto. Para la ejecución integrada
+con auditoría, usa `python -m src.pipeline --taxi all --years 2026`.
 
-# Script 1: Profiling de BRONZE
-cd 01_profiling_inicial
-python profiling_inicial.py --taxi all --years 2026
+Para ejecutarlo manualmente, este es el orden vigente:
 
-# Script 2: Detectar cambios de esquema
-cd ../02_detect_schema_changes
-python detect_schema_changes.py --taxi all --years 2023 2024 2025 2026
-
-# Script 3: Generar esquema unificado (solo si hay cambios)
-cd ../03_generate_unified_schema
-python generate_unified_schema.py --taxi all --force
-
-# Script 4: BRONZE → SILVER (Limpieza)
-cd ../04_limpieza
-python bronze_to_silver.py --taxi all --years 2026
-
-# Script 5: Análisis de calidad
-cd ../05_analisis_de_calidad
-python quality_analysis.py --taxi all --years 2026
-
-# Script 6: Profiling final
-cd ../06_profiling_silver
-python profiling_final.py --taxi all --years 2026
-
-# Desde la raíz del proyecto
-python src/silver/01_profiling_inicial/profiling_bronze.py --taxi all --years 2026
+```powershell
+python src/silver/01_profiling_inicial/profiling_inicial.py --taxi all --years 2026
 python src/silver/02_detect_schema_changes/detect_schema_changes.py --taxi all --years 2023 2024 2025 2026
-
 python src/silver/03_generate_unified_schema/generate_unified_schema.py --taxi all --force
-python src/silver/04_limpieza/bronze_to_silver.py --taxi all --years 2026
-python src/silver/05_analisis_de_calidad/quality_analysis.py --taxi all --years 2026
-python src/silver/06_profiling_silver/profiling_final.py --taxi all --years 2026
+python src/silver/04_limpieza/bronze_to_silver.py --taxi all --years 2026 --force
+python src/silver/05_normalizacion_b1/normalizacion_b1.py --taxi all --years 2026 --force
+python src/silver/05_analisis_de_calidad/quality_analysis.py --taxi all --years 2026 --force
+python src/silver/06_profiling_final/profiling_final.py --taxi all --years 2026 --force
+```
+
+La normalización B1 toma `data/silver/cleaned/` y genera la capa canónica
+`data/silver/trip_data_normalized/`. También registra cada resultado en
+`data/logs/silver_b_normalization_audit.jsonl`.
+
+Para comprobar qué entradas procesaría B1 sin lanzar Spark:
+
+```powershell
+python src/silver/05_normalizacion_b1/normalizacion_b1.py --taxi all --years 2026 --dry-run
+```
