@@ -1,308 +1,235 @@
 # Proyecto Final — TLC Trip Record Data
 
-Este repositorio contiene el desarrollo del caso **TLC Trip Record Data** para la toma de decisiones mediante análisis descriptivo, diagnóstico y predictivo.
+Pipeline reproducible para la ingesta, control, limpieza y auditoría de los registros de viajes de la **New York City Taxi and Limousine Commission (NYC TLC)**. El proyecto aplica una arquitectura **Medallion / Lakehouse** y PySpark para preparar datos para Power BI.
 
-La solución se organiza bajo una arquitectura tipo **Medallion / Lakehouse**, con control de auditoría transversal y procesamiento en **PySpark**.
+## Objetivos
+
+- Descargar los datasets oficiales de TLC de forma idempotente.
+- Preservar datos originales en Raw y una copia auditada en Bronze.
+- Estandarizar, validar y enriquecer los datos en Silver.
+- Registrar ejecuciones, etapas, reglas de calidad y artefactos.
+- Publicar vistas Parquet de auditoría para su posterior visualización.
+- Preparar un modelo estrella Parquet para análisis de negocio.
 
 ## Fuente de datos
 
-Fuente oficial:
-
-https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
+Fuente oficial: [NYC TLC Trip Record Data](https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page).
 
 Datasets considerados:
 
 - Yellow Taxi Trip Records
 - Green Taxi Trip Records
-- For-Hire Vehicle Trip Records
-- High Volume For-Hire Vehicle Trip Records
+- For-Hire Vehicle (FHV) Trip Records
+- High Volume For-Hire Vehicle (FHVHV) Trip Records
 - Taxi Zone Lookup Table
 
-Años requeridos:
+Se procesan los años 2023, 2024 y 2025 como años cerrados. Para 2026, el pipeline usa únicamente los archivos publicados al momento de la ejecución.
 
-- 2023
-- 2024
-- 2025
-- 2026, descargado automáticamente el día de ejecución según disponibilidad publicada.
-
-## Objetivo del proyecto
-
-Construir un flujo de datos completo que permita:
-
-- Descargar datos oficiales del TLC.
-- Ingerir archivos mensuales de forma automática.
-- Registrar auditoría de ejecución.
-- Organizar los datos en capas Raw, Bronze, Silver y Gold.
-- Preparar datasets analíticos para dashboards.
-- Preparar resultados para modelos de series de tiempo, segmentación y clasificación.
-
-## Arquitectura general
-
-### Nivel 1 — Fuente de datos
-
-Contiene la fuente oficial NYC TLC y los archivos Parquet publicados mensualmente.
-
-### Nivel 2 — Capa de ingesta
-
-Responsable de:
-
-- Construcción del catálogo de archivos esperados.
-- Descarga automática e idempotente.
-- Comparación contra histórico descargado.
-- Registro de metadata de ingesta.
-- Validación de existencia, tamaño, extensión, formato Parquet y legibilidad.
-- Generación de manifest y logs de auditoría.
-
-### Nivel 3 — Bronze Layer
-
-Repositorio de datos crudos controlados.
-
-Características:
-
-- Archivos Parquet originales.
-- Sin transformaciones analíticas.
-- Metadata externa asociada:
-  - fecha_ingesta
-  - hora_ingesta
-  - nombre_archivo
-  - anio
-  - mes
-  - tipo_dataset
-  - hash_archivo
-  - pipeline_id
-  - source_url
-  - tamaño_archivo
-
-### Nivel 4 — Silver Layer
-
-Capa de limpieza y estandarización.
-
-Procesos esperados:
-
-- Limpieza de registros corruptos o vacíos.
-- Validación de fechas, zonas, montos y distancias.
-- Conversión de tipos.
-- Normalización de nombres de columnas.
-- Enriquecimiento temporal.
-- Integración con Taxi Zone Lookup.
-- Auditoría Silver.
-
-### Nivel 5 — Gold Layer
-
-Capa analítica optimizada para Power BI y modelos.
-
-Datasets esperados:
-
-- Viajes diarios.
-- Revenue mensual.
-- Viajes por borough.
-- Horas pico.
-- Análisis de pagos.
-- Dataset de forecasting.
-- Dataset de segmentación.
-- Dataset de clasificación.
-
-### Nivel 6 — Machine Learning Layer
-
-Modelos esperados:
-
-- Series de tiempo: predicción de viajes o ingresos.
-- Segmentación: clustering de zonas o patrones de viaje.
-- Clasificación: categorización de viajes según demanda, rentabilidad o duración.
-
-### Nivel 7 — Dashboard Layer
-
-Dashboards esperados:
-
-- 3 dashboards descriptivos.
-- 3 dashboards diagnósticos.
-- 3 dashboards predictivos.
-- 1 dashboard de auditoría del flujo de datos.
-
-## Estructura del repositorio
+## Arquitectura
 
 ```text
-PROYECTO-FINAL/
-│
+NYC TLC (Parquet/CSV)
+        |
+        v
+Ingesta -> Raw -> Bronze -> Silver -> Gold (notebook) -> Power BI de negocio
+                              |
+                              v
+                    Auditoría transversal -> Power BI de auditoría
+```
+
+La secuencia Silver es:
+
+```text
+Profiling inicial
+  -> detección de cambios de esquema
+  -> esquema unificado
+  -> limpieza y enriquecimiento
+  -> análisis de calidad
+  -> profiling final
+```
+
+## Estructura
+
+```text
+.
 ├── config/
-│   └── pipeline_config.yaml
-│
-├── data/
+│   ├── pipeline_config.yaml
+│   └── audit_pipeline.yaml
+├── data/                       # Datos y resultados generados; ignorados por Git
 │   ├── raw/
 │   ├── bronze/
 │   ├── silver/
 │   ├── gold/
-│   └── lookup/
-│
-├── notebooks/
-│   ├── ingestion/
-│   ├── silver/
-│   ├── gold/
-│   ├── models/
-│   └── dashboards/
-│
+│   └── logs/
 ├── src/
-│   ├── ingestion/
+│   ├── ingestion/tlc_ingestion_nivel_2_3.py
 │   ├── silver/
-│   ├── gold/
-│   ├── models/
+│   │   ├── 01_profiling_inicial/
+│   │   ├── 02_detect_schema_changes/
+│   │   ├── 03_generate_unified_schema/
+│   │   ├── 04_limpieza/
+│   │   ├── 05_analisis_de_calidad/
+│   │   └── 06_profiling_final/
 │   ├── audit/
-│   └── utils/
-│
-├── audit/
-│   ├── ingestion/
-│   ├── bronze/
-│   ├── silver/
-│   ├── gold/
-│   └── dashboards/
-│
-├── logs/
-│
-├── dashboards/
-│   └── powerbi/
-│
-├── docs/
-│
+│   └── pipeline.py
+├── notebooks/
+│   └── gold/modelo_estrella_parquet_powerbi.ipynb
+├── dashboards/powerbi/
+├── audit/runtime/              # Generado; ignorado por Git
 ├── tests/
-│
 ├── requirements.txt
-├── .gitignore
-└── README.md
+└── requirements-audit.txt
 ```
+
+## Requisitos
+
+- Python 3.11 o 3.12
+- Java JDK 17 para PySpark
+- Power BI Desktop para los dashboards
+- Espacio libre suficiente: varios años y tipos de taxi pueden ocupar decenas de GB
 
 ## Instalación
 
-Crear entorno virtual:
+Desde la raíz del repositorio:
 
-```bash
+```powershell
 python -m venv .venv
-```
-
-Activar entorno en Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-Instalar dependencias:
-
-```bash
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
+pip install -r requirements-audit.txt
 ```
 
-## Crear estructura del proyecto
+`requirements.txt` contiene las dependencias de procesamiento. `requirements-audit.txt` agrega PyYAML y pytest, requeridos por el orquestador auditado y las pruebas.
 
-Ejecutar desde la carpeta raíz del proyecto:
+Compruebe el entorno:
 
-```bash
-python create_tlc_project_structure.py --root .
+```powershell
+python -m src.pipeline --help
+python src\ingestion\tlc_ingestion_nivel_2_3.py --help
+pytest tests -v
 ```
 
-Para sobrescribir archivos base como README, `.gitignore` o documentación:
+## Ejecución
 
-```bash
-python create_tlc_project_structure.py --root . --force
+### Ingesta, Raw y Bronze
+
+Prueba acotada:
+
+```powershell
+python src\ingestion\tlc_ingestion_nivel_2_3.py `
+  --years 2026 `
+  --trip-types yellow green `
+  --max-files 4 `
+  --workspace-dir data
 ```
 
-## Ejecución sugerida
+Ejecución completa:
 
-Ejecutar ingesta Nivel 2 y 3:
-
-```bash
-python src/ingestion/tlc_ingestion_nivel_2_3.py --years 2023 2024 2025 2026 --max-files none
-```
-Dia de la presentación
-```bash
-python tlc_ingestion_nivel_2_3.py --years 2026 --max-files none
-```
-Abrir notebooks:
-
-```bash
-jupyter lab
+```powershell
+python src\ingestion\tlc_ingestion_nivel_2_3.py `
+  --years 2023 2024 2025 2026 `
+  --trip-types all `
+  --max-files none `
+  --workspace-dir data
 ```
 
-## Convención de capas
+Salidas principales:
 
-### Raw
+```text
+data/raw/
+data/bronze/files/trip_data/
+data/bronze/files/lookup/
+data/bronze/_metadata/
+data/logs/tlc_ingestion_manifest.jsonl
+```
 
-Datos descargados desde la fuente oficial.
+La ingesta valida extensión, firma Parquet, metadatos, hash SHA-256 y lectura mediante PySpark.
 
-No se modifican.
+### Pipeline auditado
 
-### Bronze
+Ejecute el orquestador como módulo:
 
-Datos crudos controlados y auditados.
+```powershell
+python -m src.pipeline --years 2026 --taxi all --force-quality
+```
 
-Se agregan metadatos técnicos, manifest y validaciones.
+No use `python src/pipeline.py`; al ejecutarlo como módulo se resuelven correctamente los imports de `src`.
 
-### Silver
+Opciones útiles:
 
-Datos limpios, tipados, normalizados y enriquecidos.
+```powershell
+# Reprocesar Silver usando Bronze existente
+python -m src.pipeline --years 2026 --taxi all --skip-ingestion
 
-### Gold
+# Ejecutar un intervalo de etapas
+python -m src.pipeline --years 2026 --taxi yellow `
+  --from-stage SILVER_04_BRONZE_TO_SILVER `
+  --to-stage SILVER_06_PROFILING_FINAL
+```
 
-Datos agregados y optimizados para dashboards y modelos.
+### Ejecución manual de Silver
+
+```powershell
+python src\silver\01_profiling_inicial\profiling_inicial.py --taxi all --years 2026
+python src\silver\02_detect_schema_changes\detect_schema_changes.py --taxi all --years 2023 2024 2025 2026
+python src\silver\03_generate_unified_schema\generate_unified_schema.py --taxi all --force
+python src\silver\04_limpieza\bronze_to_silver.py --taxi all --years 2026 --force
+python src\silver\05_analisis_de_calidad\quality_analysis.py --taxi all --years 2026 --force
+python src\silver\06_profiling_final\profiling_final.py --taxi all --years 2026 --force
+```
 
 ## Auditoría
 
-El flujo de auditoría registra:
+La auditoría registra el estado del pipeline, sus etapas, reglas de calidad y artefactos. Los resultados se escriben en `audit/runtime/` y los logs de comandos en `logs/pipeline/`.
 
-- pipeline_id
-- pipeline_name
-- pipeline_version
-- started_at
-- finished_at
-- file_name
-- source_url
-- local_path
-- status
-- error_message
-- size_bytes
-- sha256
-- records_processed
-- execution_time
+Genere las vistas para Power BI:
 
-Los archivos de auditoría se almacenan en:
-
-```text
-audit/
-logs/
-data/bronze/tlc_trip_records/_metadata/
+```powershell
+python -m src.audit.dashboard_views
+Get-ChildItem .\audit\runtime\views\latest_*.parquet |
+  Select-Object Name, Length, LastWriteTime
 ```
 
-## Política de GitHub
+Las vistas principales son:
 
-No se deben subir archivos pesados de datos al repositorio.
+```text
+audit/runtime/views/latest_pipeline_run.parquet
+audit/runtime/views/latest_stage_runs.parquet
+audit/runtime/views/latest_quality_results.parquet
+audit/runtime/views/latest_file_runs.parquet
+```
 
-Se ignoran:
+Antes de abrir Power BI, verifique que las vistas de calidad y archivos no estén vacías.
 
-- data/raw/**
-- data/bronze/**
-- data/silver/**
-- data/gold/**
-- logs/**
-- archivos temporales
-- outputs locales
+## Gold y análisis de negocio
 
-Se conservan las carpetas mediante archivos `.gitkeep`.
+El notebook `notebooks/gold/modelo_estrella_parquet_powerbi.ipynb` construye el modelo estrella Parquet para Power BI. Complete primero la capa Silver y abra Jupyter Lab:
 
-## Requisitos técnicos
+```powershell
+jupyter lab
+```
 
-- Python 3.11 o 3.12 recomendado.
-- Java JDK 17 para PySpark.
-- PySpark.
-- pandas.
-- pyarrow.
-- rich.
-- tqdm.
+Los directorios de modelos de series de tiempo, segmentación y clasificación están reservados para su implementación. Cada modelo futuro debe incluir datos de entrada, entrenamiento reproducible, métricas, artefacto persistido y documentación de interpretación.
 
-## Estado esperado del proyecto
+## Pruebas
 
-El repositorio debe permitir demostrar:
+```powershell
+pytest tests -v
+```
 
-- Arquitectura definida.
-- Ingesta reproducible.
-- Uso de PySpark.
-- Control de auditoría.
-- Separación por capas.
-- Preparación para análisis descriptivo, diagnóstico y predictivo.
+Las pruebas actuales cubren la persistencia y exportación de auditoría, reglas de calidad y la estructura del notebook Gold. Se recomienda añadir una prueba de integración con una muestra pequeña de Parquet TLC para validar el flujo completo de ingesta a Silver.
+
+## Criterios de demostración
+
+1. Una ejecución exitosa y una fallida quedan registradas en auditoría.
+2. Las vistas `latest_*` reflejan la última ejecución.
+3. El dashboard muestra etapas y reglas de calidad fallidas, incluyendo su mensaje.
+4. Los artefactos generados se pueden relacionar con su etapa.
+5. Tras una nueva ejecución y actualizar Power BI, los datos cambian sin reimportar archivos.
+
+## Notas operativas
+
+- Los datos, logs y resultados generados no se versionan para evitar subir archivos pesados.
+- Los meses futuros o aún no publicados por NYC TLC no son errores del pipeline.
+- Para una ejecución completa, planifique memoria, almacenamiento y tiempo suficientes.
