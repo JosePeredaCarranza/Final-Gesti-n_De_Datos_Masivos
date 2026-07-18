@@ -11,7 +11,7 @@ Copiar en la raíz respetando rutas:
 - `src/pipeline.py`
 - `config/audit_pipeline.yaml`
 - `tests/test_audit_manager.py`
-- `requirements-audit.txt`
+- `requirements.txt`
 
 ## Scripts existentes
 
@@ -40,7 +40,7 @@ logs/pipeline/
 ## Comandos
 
 ```bash
-pip install -r requirements-audit.txt
+pip install -r requirements.txt
 pytest tests/test_audit_manager.py -v
 python -m src.pipeline --years 2026
 ```

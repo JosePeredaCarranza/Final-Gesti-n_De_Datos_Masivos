@@ -1,9 +1,18 @@
+# Procesamiento de datos
 pyspark
-pandas
-pyarrow
+pandas>=2.2,<3
+pyarrow>=15,<22
 requests
 rich
 tqdm
+
+# Orquestación y auditoría
+PyYAML>=6,<7
+
+# Entorno interactivo y pruebas
 ipykernel
 jupyterlab
+pytest>=8,<9
+
+# Compatibilidad con el flujo histórico basado en MongoDB (opcional)
 pymongo>=4.8,<5

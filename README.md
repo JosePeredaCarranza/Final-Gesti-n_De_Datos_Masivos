@@ -77,8 +77,7 @@ Profiling inicial
 ├── dashboards/powerbi/
 ├── audit/runtime/              # Generado; ignorado por Git
 ├── tests/
-├── requirements.txt
-└── requirements-audit.txt
+└── requirements.txt
 ```
 
 ## Requisitos
@@ -97,10 +96,9 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-pip install -r requirements-audit.txt
 ```
 
-`requirements.txt` contiene las dependencias de procesamiento. `requirements-audit.txt` agrega PyYAML y pytest, requeridos por el orquestador auditado y las pruebas.
+`requirements.txt` contiene las dependencias de procesamiento, auditoría, entorno interactivo y pruebas.
 
 Compruebe el entorno:
 
